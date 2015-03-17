@@ -10,22 +10,29 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.stream.Stream;
 
 import bank.InactiveException;
 import bank.OverdrawException;
 
 public class Driver implements bank.BankDriver {
-	private Bank bank = null;
+	private static Bank bank = null;
 
+	static {		
+		bank = new Bank();
+	}
+	
 	@Override
 	public void connect(String[] args) {
-		bank = new Bank();
 		System.out.println("connected...");
 	}
 
 	@Override
 	public void disconnect() {
-		bank = null;
+		//bank = null;
 		System.out.println("disconnected...");
 	}
 
@@ -35,52 +42,119 @@ public class Driver implements bank.BankDriver {
 	}
 
 	static class Bank implements bank.Bank {
-
-		private final Map<String, Account> accounts = new HashMap<String, Account>();
-
+		private final Map<String, Account> accounts = new ConcurrentHashMap<String, Driver.Account>();
+		
+		{
+			createAccount("Test1");
+			createAccount("Test2");
+		}
+		
 		@Override
 		public Set<String> getAccountNumbers() {
-			System.out.println("Bank.getAccountNumbers has to be implemented");
-			return new HashSet<String>(); // TODO has to be replaced
+			Set<String> accountNumbers = new HashSet<String>();
+			
+			accounts.values()
+				.stream()
+				.filter(account -> account.isActive())
+				.forEach( account -> accountNumbers.add(account.getNumber()));
+			
+			return accountNumbers;
 		}
 
 		@Override
-		public String createAccount(String owner) {
-			// TODO has to be implemented
-			System.out.println("Bank.createAccount has to be implemented");
-			return null;
+		public String createAccount(String owner) {						
+			// final: enforce constructor to run before it returns reference to object
+			final Account newAccount = new Account(owner); 
+			
+			accounts.put(owner, newAccount);			
+			return newAccount.getNumber();
 		}
 
 		@Override
-		public boolean closeAccount(String number) {
-			// TODO has to be implemented
-			System.out.println("Bank.closeAccount has to be implemented");
-			return false;
+		synchronized // precheck must be valid till we finish execution
+		public boolean closeAccount(String number) throws IOException {
+			Account account = (Account) getAccount(number);
+			
+			if(account == null 
+					||  !account.isActive()
+					|| account.getBalance() > 0){				
+				return false;
+			}else{
+				account.active  = false;
+				return true;
+			}			
 		}
 
 		@Override
 		public bank.Account getAccount(String number) {
-			return accounts.get(number);
+			if(accounts.values()
+					.stream()
+					.filter(account -> account.getNumber().equals(number))
+					.count() == 0) {
+				return null;
+			}else{				
+				return accounts.values()
+						.stream()
+						.filter(account -> account.getNumber().equals(number))
+						.findFirst()
+						.get();
+			}
+			
 		}
 
-		@Override
+		@Override		
 		public void transfer(bank.Account from, bank.Account to, double amount)
 				throws IOException, InactiveException, OverdrawException {
-			// TODO has to be implemented
-			System.out.println("Bank.transfer has to be implemented");
+
+			bank.Account first, second;
+			int nFrom = ((Driver.Account) from).accountNumber;
+			int nTo = ((Driver.Account) to).accountNumber;
+			if(nFrom < nTo){
+				first = from;
+				second = to;
+			}else{
+				first = to;
+				second = from;
+			}
+			
+			
+			// Deadlock if tran(from,to), tran(to,from) called on same time
+			// Deadlock avoiding: lock always the smallest accountNr first
+			synchronized (first) {
+				synchronized (second) {
+					if(!from.isActive() || !to.isActive()) throw new InactiveException();
+					if(from.getBalance() < amount) throw new OverdrawException();
+					if(amount < 0) throw new IllegalArgumentException();
+					
+					((Account) from).balance -= amount;
+					((Account) to).balance += amount;
+				}								
+			}	
+			
 		}
 
 	}
 
 	static class Account implements bank.Account {
+		private static int index = 1; 
+		
+		synchronized // only one thread should increment this value and return the old one 
+		private static int getNextAccountNr(){
+			return index++;
+		}
+		
+		private int accountNumber;
 		private String number;
 		private String owner;
-		private double balance;
-		private boolean active = true;
+		
+		// volatile: these values can be changed. Changes should be written down to memory
+		private volatile double balance;
+		private volatile boolean active = true;
 
 		Account(String owner) {
 			this.owner = owner;
-			// TODO account number has to be set here or has to be passed using the constructor
+			this.accountNumber = getNextAccountNr();
+			this.number = Integer.toString(this.accountNumber);
 		}
 
 		@Override
@@ -104,15 +178,20 @@ public class Driver implements bank.BankDriver {
 		}
 
 		@Override
+		synchronized // multiple transaction on one account on the same time impossible
 		public void deposit(double amount) throws InactiveException {
-			// TODO has to be implemented
-			System.out.println("Account.deposit has to be implemented");
+			if(!isActive()) throw new InactiveException();
+			if(amount < 0) throw new IllegalArgumentException();
+			balance += amount;
 		}
 
 		@Override
+		synchronized // multiple transaction on one account on the same time impossible
 		public void withdraw(double amount) throws InactiveException, OverdrawException {
-			// TODO has to be implemented
-			System.out.println("Account.withdraw has to be implemented");
+			if(!isActive()) throw new InactiveException();
+			if(getBalance() < amount) throw new OverdrawException();
+			
+			balance -= amount;
 		}
 
 	}
