@@ -42,7 +42,7 @@ public class Driver implements bank.BankDriver {
 	}
 
 	static class Bank implements bank.Bank {
-		private final Map<String, Account> accounts = new ConcurrentHashMap<String, Driver.Account>();
+		private final Map<String, Account> accounts = new ConcurrentHashMap<String, Account>();
 		
 		{
 			createAccount("Test1");
@@ -71,22 +71,25 @@ public class Driver implements bank.BankDriver {
 		}
 
 		@Override
-		synchronized // precheck must be valid till we finish execution
 		public boolean closeAccount(String number) throws IOException {
 			Account account = (Account) getAccount(number);
 			
-			if(account == null 
-					||  !account.isActive()
+			synchronized (account) { // Correction: Use Locking on Account (not bank)				
+				if(account == null 
+					|| !account.isActive() 
 					|| account.getBalance() > 0){				
-				return false;
-			}else{
-				account.active  = false;
-				return true;
-			}			
+					return false;
+				}else{
+					account.setActive(false);
+					return true;
+				}			
+			}
 		}
 
 		@Override
 		public bank.Account getAccount(String number) {
+			//return accounts.get(number);
+			
 			if(accounts.values()
 					.stream()
 					.filter(account -> account.getNumber().equals(number))
@@ -157,6 +160,11 @@ public class Driver implements bank.BankDriver {
 			this.number = Integer.toString(this.accountNumber);
 		}
 
+		synchronized
+		public void setActive(boolean flag){
+			this.active = flag;
+		}
+		
 		@Override
 		public double getBalance() {
 			return balance;
